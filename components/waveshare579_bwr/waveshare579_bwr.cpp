@@ -1,6 +1,7 @@
 #include "waveshare579_bwr.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstring>
 
 #include "esphome/core/application.h"
@@ -20,7 +21,7 @@ void Waveshare579BWR::setup() {
 
   this->init_internal_(this->get_buffer_length_());
   if (this->buffer_ == nullptr) {
-    ESP_LOGE(TAG, "Framebuffer allocation failed (53856 bytes required)");
+    ESP_LOGE(TAG, "Framebuffer allocation failed (80784 bytes required)");
     this->mark_failed();
     return;
   }
@@ -28,6 +29,7 @@ void Waveshare579BWR::setup() {
   // Black plane: 1=white, 0=black. Red plane: 0=white, 1=red.
   std::memset(this->buffer_, 0xFF, PLANE_SIZE);
   std::memset(this->buffer_ + PLANE_SIZE, 0x00, PLANE_SIZE);
+  std::memset(this->buffer_ + 2 * PLANE_SIZE, 0x00, PLANE_SIZE);
   this->init_display_();
   // A display with update_interval: never must still render once after boot.
   this->set_timeout(100, [this]() { this->update(); });
@@ -39,6 +41,7 @@ void Waveshare579BWR::dump_config() {
   LOG_PIN("  DC Pin: ", this->dc_pin_);
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  Busy Pin: ", this->busy_pin_);
+  ESP_LOGCONFIG(TAG, "  Full refresh after %" PRIu32 " partial refreshes", this->full_update_every_);
   LOG_UPDATE_INTERVAL(this);
 }
 
@@ -47,7 +50,59 @@ void Waveshare579BWR::update() {
   this->refresh_handled_ = false;
   this->do_update_();
   if (!this->refresh_handled_)
+    this->refresh_automatically_();
+}
+
+uint32_t Waveshare579BWR::red_plane_hash_() const {
+  // FNV-1a is sufficient here: this is change detection, not authentication.
+  uint32_t hash = 2166136261UL;
+  const uint8_t *red_plane = this->buffer_ + PLANE_SIZE;
+  for (size_t i = 0; i < PLANE_SIZE; i++) {
+    hash ^= red_plane[i];
+    hash *= 16777619UL;
+  }
+  return hash;
+}
+
+void Waveshare579BWR::refresh_automatically_() {
+  if (!this->partial_basemap_ready_) {
     this->display();
+    return;
+  }
+
+  const uint32_t red_hash = this->red_plane_hash_();
+  if (red_hash != this->last_red_hash_) {
+    ESP_LOGI(TAG, "Red plane changed; using full refresh");
+    this->display();
+    return;
+  }
+
+  const uint8_t *black_plane = this->buffer_;
+  const uint8_t *previous_black = this->buffer_ + 2 * PLANE_SIZE;
+  int min_byte = BYTES_PER_ROW;
+  int max_byte = -1;
+  int min_y = HEIGHT;
+  int max_y = -1;
+
+  for (int y = 0; y < HEIGHT; y++) {
+    const size_t row = size_t(y) * BYTES_PER_ROW;
+    for (int byte = 0; byte < BYTES_PER_ROW; byte++) {
+      if (black_plane[row + byte] != previous_black[row + byte]) {
+        min_byte = std::min(min_byte, byte);
+        max_byte = std::max(max_byte, byte);
+        min_y = std::min(min_y, y);
+        max_y = std::max(max_y, y);
+      }
+    }
+  }
+
+  if (max_byte < 0) {
+    ESP_LOGD(TAG, "Framebuffer unchanged; skipping refresh");
+    this->refresh_handled_ = true;
+    return;
+  }
+
+  this->partial_refresh(min_byte * 8, min_y, (max_byte - min_byte + 1) * 8, max_y - min_y + 1);
 }
 
 void Waveshare579BWR::fill(Color color) {
@@ -106,6 +161,8 @@ void Waveshare579BWR::display() {
   // partial refresh. The visible red pixels have already been driven by now,
   // so replacing that RAM with the current black plane does not alter them.
   this->prepare_partial_basemap_();
+  std::memcpy(this->buffer_ + 2 * PLANE_SIZE, black_plane, PLANE_SIZE);
+  this->last_red_hash_ = this->red_plane_hash_();
   this->partial_basemap_ready_ = true;
   this->partial_refresh_count_ = 0;
   this->refresh_handled_ = true;
@@ -116,7 +173,7 @@ void Waveshare579BWR::partial_refresh(int x, int y, int width, int height) {
   if (this->is_failed() || width <= 0 || height <= 0)
     return;
 
-  if (!this->partial_basemap_ready_ || this->partial_refresh_count_ >= 5) {
+  if (!this->partial_basemap_ready_ || this->partial_refresh_count_ >= this->full_update_every_) {
     ESP_LOGI(TAG, "Partial baseline unavailable or refresh limit reached; using full refresh");
     this->display();
     return;
@@ -167,7 +224,14 @@ void Waveshare579BWR::partial_refresh(int x, int y, int width, int height) {
   this->send_command_(0x20);
   if (this->wait_busy_()) {
     this->partial_refresh_count_++;
-    ESP_LOGI(TAG, "Partial refresh complete (%u/5)", this->partial_refresh_count_);
+    uint8_t *previous_black = this->buffer_ + 2 * PLANE_SIZE;
+    for (int row = y; row <= y_end; row++) {
+      const size_t offset = size_t(row) * BYTES_PER_ROW + first_byte;
+      std::memcpy(previous_black + offset, black_plane + offset, last_byte - first_byte + 1);
+    }
+    this->last_red_hash_ = this->red_plane_hash_();
+    ESP_LOGI(TAG, "Partial refresh complete (%" PRIu32 "/%" PRIu32 ")", this->partial_refresh_count_,
+             this->full_update_every_);
   }
 }
 

@@ -12,6 +12,8 @@ from esphome.const import (
     CONF_UPDATE_INTERVAL,
 )
 
+CONF_FULL_UPDATE_EVERY = "full_update_every"
+
 DEPENDENCIES = ["spi"]
 AUTO_LOAD = ["display"]
 
@@ -30,6 +32,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_DC_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_BUSY_PIN): pins.gpio_input_pin_schema,
             cv.Required(CONF_RESET_PIN): pins.gpio_output_pin_schema,
+            cv.Optional(CONF_FULL_UPDATE_EVERY, default=5): cv.positive_int,
             cv.Optional(CONF_UPDATE_INTERVAL, default="60s"): cv.update_interval,
         }
     ).extend(spi.spi_device_schema(cs_pin_required=True)),
@@ -58,5 +61,5 @@ async def to_code(config):
     cg.add(var.set_busy_pin(busy_pin))
     reset_pin = await cg.gpio_pin_expression(config[CONF_RESET_PIN])
     cg.add(var.set_reset_pin(reset_pin))
+    cg.add(var.set_full_update_every(config[CONF_FULL_UPDATE_EVERY]))
     cg.add(var.set_update_interval(config[CONF_UPDATE_INTERVAL]))
-

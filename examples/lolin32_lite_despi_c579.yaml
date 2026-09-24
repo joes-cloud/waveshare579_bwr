@@ -29,6 +29,7 @@ display:
       mode:
         input: true
         pulldown: true
+    full_update_every: 5
     update_interval: never
     lambda: |-
       it.fill(Color::WHITE);
@@ -36,5 +37,6 @@ display:
       it.print(20, 40, id(font_32), Color::BLACK, "BLACK");
       it.print(20, 95, id(font_32), id(epaper_red), "RED");
       it.filled_rectangle(500, 40, 180, 80, id(epaper_red));
-      // For later black/white-only updates, call for example:
+      // update() detects black/white changes and refreshes only their bounding box.
+      // A specific region can still be refreshed manually if needed:
       // id(epaper_display).partial_refresh(0, 0, 396, 136);

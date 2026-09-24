@@ -16,6 +16,7 @@ class Waveshare579BWR
   void set_dc_pin(GPIOPin *pin) { this->dc_pin_ = pin; }
   void set_busy_pin(GPIOPin *pin) { this->busy_pin_ = pin; }
   void set_reset_pin(GPIOPin *pin) { this->reset_pin_ = pin; }
+  void set_full_update_every(uint32_t full_update_every) { this->full_update_every_ = full_update_every; }
 
   void setup() override;
   void update() override;
@@ -37,7 +38,7 @@ class Waveshare579BWR
   static constexpr size_t BYTES_PER_ROW = WIDTH / 8;
   static constexpr size_t PLANE_SIZE = BYTES_PER_ROW * HEIGHT;
 
-  size_t get_buffer_length_() { return 2 * PLANE_SIZE; }
+  size_t get_buffer_length_() { return 3 * PLANE_SIZE; }
   void draw_absolute_pixel_internal(int x, int y, Color color) override;
 
   void reset_();
@@ -53,13 +54,17 @@ class Waveshare579BWR
   void write_window_(uint8_t command, const uint8_t *plane, int byte_start, int byte_end,
                      int y_start, int y_end);
   void prepare_partial_basemap_();
+  void refresh_automatically_();
+  uint32_t red_plane_hash_() const;
 
   GPIOPin *dc_pin_{nullptr};
   GPIOPin *busy_pin_{nullptr};
   GPIOPin *reset_pin_{nullptr};
   bool refresh_handled_{false};
   bool partial_basemap_ready_{false};
-  uint8_t partial_refresh_count_{0};
+  uint32_t partial_refresh_count_{0};
+  uint32_t full_update_every_{5};
+  uint32_t last_red_hash_{0};
 };
 
 }  // namespace waveshare579_bwr
