@@ -24,9 +24,12 @@ void Waveshare579BWR::setup() {
     return;
   }
 
-  // Both planes use 1 for paper white. The second plane starts at PLANE_SIZE.
-  std::memset(this->buffer_, 0xFF, this->get_buffer_length_());
+  // Black plane: 1=white, 0=black. Red plane: 0=white, 1=red.
+  std::memset(this->buffer_, 0xFF, PLANE_SIZE);
+  std::memset(this->buffer_ + PLANE_SIZE, 0x00, PLANE_SIZE);
   this->init_display_();
+  // A display with update_interval: never must still render once after boot.
+  this->set_timeout(100, [this]() { this->update(); });
 }
 
 void Waveshare579BWR::dump_config() {
@@ -38,7 +41,11 @@ void Waveshare579BWR::dump_config() {
   LOG_UPDATE_INTERVAL(this);
 }
 
-void Waveshare579BWR::update() { this->do_update_(); }
+void Waveshare579BWR::update() {
+  ESP_LOGD(TAG, "Rendering framebuffer");
+  this->do_update_();
+  this->display();
+}
 
 void Waveshare579BWR::fill(Color color) {
   if (this->get_clipping().is_set()) {
@@ -48,7 +55,7 @@ void Waveshare579BWR::fill(Color color) {
   const bool red = color.r > 127 && color.r > color.g * 2 && color.r > color.b * 2;
   const bool black = !red && (uint16_t(color.r) + color.g + color.b < 384);
   std::memset(this->buffer_, black ? 0x00 : 0xFF, PLANE_SIZE);
-  std::memset(this->buffer_ + PLANE_SIZE, red ? 0x00 : 0xFF, PLANE_SIZE);
+  std::memset(this->buffer_ + PLANE_SIZE, red ? 0xFF : 0x00, PLANE_SIZE);
 }
 
 void Waveshare579BWR::draw_absolute_pixel_internal(int x, int y, Color color) {
@@ -63,9 +70,9 @@ void Waveshare579BWR::draw_absolute_pixel_internal(int x, int y, Color color) {
   const bool red = color.r > 127 && color.r > color.g * 2 && color.r > color.b * 2;
   const bool black = !red && (uint16_t(color.r) + color.g + color.b < 384);
 
-  // White=(1,1), black=(0,1), red=(1,0).
+  // Controller-native encoding: white=(1,0), black=(0,0), red=(1,1).
   black_plane[pos] = black ? (black_plane[pos] & ~mask) : (black_plane[pos] | mask);
-  red_plane[pos] = red ? (red_plane[pos] & ~mask) : (red_plane[pos] | mask);
+  red_plane[pos] = red ? (red_plane[pos] | mask) : (red_plane[pos] & ~mask);
 }
 
 void Waveshare579BWR::display() {
@@ -74,6 +81,8 @@ void Waveshare579BWR::display() {
 
   const uint8_t *black_plane = this->buffer_;
   const uint8_t *red_plane = this->buffer_ + PLANE_SIZE;
+
+  ESP_LOGI(TAG, "Writing black and red planes");
 
   this->set_ram_slave_();
   this->write_half_(0xA4, black_plane, false);
@@ -87,7 +96,8 @@ void Waveshare579BWR::display() {
   this->send_command_(0x22);
   this->send_data_(0xF7);
   this->send_command_(0x20);
-  this->wait_busy_();
+  if (this->wait_busy_())
+    ESP_LOGI(TAG, "Full refresh complete");
 }
 
 void Waveshare579BWR::write_half_(uint8_t command, const uint8_t *plane, bool master) {
