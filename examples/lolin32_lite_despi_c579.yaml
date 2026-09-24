@@ -1,0 +1,40 @@
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [waveshare579_bwr]
+
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+
+color:
+  - id: epaper_red
+    red: 100%
+    green: 0%
+    blue: 0%
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_32
+    size: 32
+
+display:
+  - platform: waveshare579_bwr
+    id: epaper_display
+    cs_pin: GPIO5
+    dc_pin: GPIO17
+    reset_pin: GPIO27
+    busy_pin:
+      number: GPIO19
+      mode:
+        input: true
+        pulldown: true
+    update_interval: never
+    lambda: |-
+      it.fill(Color::WHITE);
+      it.rectangle(0, 0, 792, 272, Color::BLACK);
+      it.print(20, 40, id(font_32), Color::BLACK, "BLACK");
+      it.print(20, 95, id(font_32), id(epaper_red), "RED");
+      it.filled_rectangle(500, 40, 180, 80, id(epaper_red));
+      id(epaper_display).display();
