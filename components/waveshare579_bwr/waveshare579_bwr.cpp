@@ -1,5 +1,6 @@
 #include "waveshare579_bwr.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "esphome/core/application.h"
@@ -43,8 +44,10 @@ void Waveshare579BWR::dump_config() {
 
 void Waveshare579BWR::update() {
   ESP_LOGD(TAG, "Rendering framebuffer");
+  this->refresh_handled_ = false;
   this->do_update_();
-  this->display();
+  if (!this->refresh_handled_)
+    this->display();
 }
 
 void Waveshare579BWR::fill(Color color) {
@@ -98,6 +101,82 @@ void Waveshare579BWR::display() {
   this->send_command_(0x20);
   if (this->wait_busy_())
     ESP_LOGI(TAG, "Full refresh complete");
+
+  // The SSD1683 uses the second RAM bank as the B/W reference image during
+  // partial refresh. The visible red pixels have already been driven by now,
+  // so replacing that RAM with the current black plane does not alter them.
+  this->prepare_partial_basemap_();
+  this->partial_basemap_ready_ = true;
+  this->partial_refresh_count_ = 0;
+  this->refresh_handled_ = true;
+}
+
+void Waveshare579BWR::partial_refresh(int x, int y, int width, int height) {
+  this->refresh_handled_ = true;
+  if (this->is_failed() || width <= 0 || height <= 0)
+    return;
+
+  if (!this->partial_basemap_ready_ || this->partial_refresh_count_ >= 5) {
+    ESP_LOGI(TAG, "Partial baseline unavailable or refresh limit reached; using full refresh");
+    this->display();
+    return;
+  }
+
+  int x_end = x + width - 1;
+  int y_end = y + height - 1;
+  x = std::max(0, x);
+  y = std::max(0, y);
+  x_end = std::min(WIDTH - 1, x_end);
+  y_end = std::min(HEIGHT - 1, y_end);
+  if (x > x_end || y > y_end)
+    return;
+
+  // SSD1683 window coordinates are byte based. Extend to whole bytes.
+  const int first_byte = x / 8;
+  const int last_byte = x_end / 8;
+  const uint8_t *black_plane = this->buffer_;
+
+  ESP_LOGI(TAG, "Partial B/W refresh: x=%d, y=%d, w=%d, h=%d", x, y, x_end - x + 1,
+           y_end - y + 1);
+
+  // Power analog blocks for the partial update and keep the border unchanged.
+  this->send_command_(0x3C);
+  this->send_data_(0x80);
+  this->send_command_(0x22);
+  this->send_data_(0xC0);
+  this->send_command_(0x20);
+  if (!this->wait_busy_())
+    return;
+
+  if (first_byte <= 49) {
+    const int slave_start = first_byte;
+    const int slave_end = std::min(49, last_byte);
+    this->set_window_slave_(slave_start, slave_end, y, y_end);
+    this->write_window_(0xA4, black_plane, slave_start, slave_end, y, y_end);
+  }
+
+  if (last_byte >= 49) {
+    const int master_start = std::max(49, first_byte);
+    const int master_end = last_byte;
+    this->set_window_master_(master_start, master_end, y, y_end);
+    this->write_window_(0x24, black_plane, master_start, master_end, y, y_end);
+  }
+
+  this->send_command_(0x22);
+  this->send_data_(0x1C);
+  this->send_command_(0x20);
+  if (this->wait_busy_()) {
+    this->partial_refresh_count_++;
+    ESP_LOGI(TAG, "Partial refresh complete (%u/5)", this->partial_refresh_count_);
+  }
+}
+
+void Waveshare579BWR::prepare_partial_basemap_() {
+  const uint8_t *black_plane = this->buffer_;
+  this->set_ram_slave_();
+  this->write_half_(0xA6, black_plane, false);
+  this->set_ram_master_();
+  this->write_half_(0x26, black_plane, true);
 }
 
 void Waveshare579BWR::write_half_(uint8_t command, const uint8_t *plane, bool master) {
@@ -111,6 +190,19 @@ void Waveshare579BWR::write_half_(uint8_t command, const uint8_t *plane, bool ma
       this->write_byte(plane[row + first + b]);
     if ((y & 31) == 0)
       App.feed_wdt();
+  }
+  this->disable();
+}
+
+void Waveshare579BWR::write_window_(uint8_t command, const uint8_t *plane, int byte_start,
+                                    int byte_end, int y_start, int y_end) {
+  this->send_command_(command);
+  this->dc_pin_->digital_write(true);
+  this->enable();
+  for (int row = y_start; row <= y_end; row++) {
+    for (int byte = byte_start; byte <= byte_end; byte++)
+      this->write_byte(plane[size_t(row) * BYTES_PER_ROW + byte]);
+    App.feed_wdt();
   }
   this->disable();
 }
@@ -188,6 +280,45 @@ void Waveshare579BWR::set_ram_slave_() {
   this->send_command_(0xCF);
   this->send_data_(0x00);
   this->send_data_(0x00);
+}
+
+void Waveshare579BWR::set_window_master_(int byte_start, int byte_end, int y_start, int y_end) {
+  // Master X runs backwards; framebuffer byte 98 maps to controller address 0.
+  const int address_start = 98 - byte_start;
+  const int address_end = 98 - byte_end;
+  this->send_command_(0x11);
+  this->send_data_(0x02);
+  this->send_command_(0x44);
+  this->send_data_(address_start);
+  this->send_data_(address_end);
+  this->send_command_(0x45);
+  this->send_data_(y_start & 0xFF);
+  this->send_data_((y_start >> 8) & 0x01);
+  this->send_data_(y_end & 0xFF);
+  this->send_data_((y_end >> 8) & 0x01);
+  this->send_command_(0x4E);
+  this->send_data_(address_start);
+  this->send_command_(0x4F);
+  this->send_data_(y_start & 0xFF);
+  this->send_data_((y_start >> 8) & 0x01);
+}
+
+void Waveshare579BWR::set_window_slave_(int byte_start, int byte_end, int y_start, int y_end) {
+  this->send_command_(0x91);
+  this->send_data_(0x03);
+  this->send_command_(0xC4);
+  this->send_data_(byte_start);
+  this->send_data_(byte_end);
+  this->send_command_(0xC5);
+  this->send_data_(y_start & 0xFF);
+  this->send_data_((y_start >> 8) & 0x01);
+  this->send_data_(y_end & 0xFF);
+  this->send_data_((y_end >> 8) & 0x01);
+  this->send_command_(0xCE);
+  this->send_data_(byte_start);
+  this->send_command_(0xCF);
+  this->send_data_(y_start & 0xFF);
+  this->send_data_((y_start >> 8) & 0x01);
 }
 
 void Waveshare579BWR::init_display_() {

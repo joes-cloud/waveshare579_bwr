@@ -22,6 +22,7 @@ class Waveshare579BWR
   void dump_config() override;
   void fill(Color color) override;
   void display();
+  void partial_refresh(int x, int y, int width, int height);
 
   float get_setup_priority() const override { return setup_priority::HARDWARE; }
   int get_width_internal() override { return WIDTH; }
@@ -46,11 +47,19 @@ class Waveshare579BWR
   void init_display_();
   void set_ram_master_();
   void set_ram_slave_();
+  void set_window_master_(int byte_start, int byte_end, int y_start, int y_end);
+  void set_window_slave_(int byte_start, int byte_end, int y_start, int y_end);
   void write_half_(uint8_t command, const uint8_t *plane, bool master);
+  void write_window_(uint8_t command, const uint8_t *plane, int byte_start, int byte_end,
+                     int y_start, int y_end);
+  void prepare_partial_basemap_();
 
   GPIOPin *dc_pin_{nullptr};
   GPIOPin *busy_pin_{nullptr};
   GPIOPin *reset_pin_{nullptr};
+  bool refresh_handled_{false};
+  bool partial_basemap_ready_{false};
+  uint8_t partial_refresh_count_{0};
 };
 
 }  // namespace waveshare579_bwr
