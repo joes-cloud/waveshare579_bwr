@@ -1,7 +1,5 @@
 external_components:
-  - source:
-      type: local
-      path: components
+  - source: github://joes-cloud/waveshare579_bwr
     components: [waveshare579_bwr]
 
 spi:
