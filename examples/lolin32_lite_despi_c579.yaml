@@ -30,6 +30,7 @@ display:
         input: true
         pulldown: true
     full_update_every: 5
+    full_refresh_mode: fast
     update_interval: never
     lambda: |-
       it.fill(Color::WHITE);

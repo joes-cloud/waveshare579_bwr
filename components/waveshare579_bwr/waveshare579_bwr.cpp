@@ -30,7 +30,6 @@ void Waveshare579BWR::setup() {
   std::memset(this->buffer_, 0xFF, PLANE_SIZE);
   std::memset(this->buffer_ + PLANE_SIZE, 0x00, PLANE_SIZE);
   std::memset(this->buffer_ + 2 * PLANE_SIZE, 0x00, PLANE_SIZE);
-  this->init_display_();
   // A display with update_interval: never must still render once after boot.
   this->set_timeout(100, [this]() { this->update(); });
 }
@@ -42,6 +41,7 @@ void Waveshare579BWR::dump_config() {
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  Busy Pin: ", this->busy_pin_);
   ESP_LOGCONFIG(TAG, "  Full refresh after %" PRIu32 " partial refreshes", this->full_update_every_);
+  ESP_LOGCONFIG(TAG, "  Full refresh mode: %s", this->fast_refresh_ ? "fast" : "normal");
   LOG_UPDATE_INTERVAL(this);
 }
 
@@ -140,7 +140,12 @@ void Waveshare579BWR::display() {
   const uint8_t *black_plane = this->buffer_;
   const uint8_t *red_plane = this->buffer_ + PLANE_SIZE;
 
-  ESP_LOGI(TAG, "Writing black and red planes");
+  ESP_LOGI(TAG, "Writing black and red planes for %s refresh",
+           this->fast_refresh_ ? "fast" : "normal");
+
+  // The vendor requires re-initialization before every full-screen update.
+  // Partial updates intentionally keep the existing controller state.
+  this->init_display_();
 
   this->set_ram_slave_();
   this->write_half_(0xA4, black_plane, false);
@@ -152,7 +157,7 @@ void Waveshare579BWR::display() {
   this->write_half_(0x26, red_plane, true);
 
   this->send_command_(0x22);
-  this->send_data_(0xF7);
+  this->send_data_(this->fast_refresh_ ? 0xC7 : 0xF7);
   this->send_command_(0x20);
   if (this->wait_busy_())
     ESP_LOGI(TAG, "Full refresh complete");
@@ -397,15 +402,15 @@ void Waveshare579BWR::init_display_() {
   this->send_command_(0x20);
   delay(10);
   this->wait_busy_();
-  this->send_command_(0x1A);  // Reference temperature used by vendor code
-  this->send_data_(0x64);
+  this->send_command_(0x1A);  // Reference temperature selects normal/fast OTP waveform
+  this->send_data_(this->fast_refresh_ ? 0x5A : 0x64);
   this->send_data_(0x00);
   this->send_command_(0x22);
-  this->send_data_(0xB1);
+  this->send_data_(0x91);
   this->send_command_(0x20);
   delay(10);
   this->wait_busy_();
-  ESP_LOGI(TAG, "Initialization complete");
+  ESP_LOGI(TAG, "%s refresh initialization complete", this->fast_refresh_ ? "Fast" : "Normal");
 }
 
 }  // namespace waveshare579_bwr
