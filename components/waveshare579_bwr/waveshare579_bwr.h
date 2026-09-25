@@ -18,6 +18,7 @@ class Waveshare579BWR
   void set_reset_pin(GPIOPin *pin) { this->reset_pin_ = pin; }
   void set_full_update_every(uint32_t full_update_every) { this->full_update_every_ = full_update_every; }
   void set_fast_refresh(bool fast_refresh) { this->fast_refresh_ = fast_refresh; }
+  void set_update_debounce(uint32_t update_debounce_ms) { this->update_debounce_ms_ = update_debounce_ms; }
 
   void setup() override;
   void update() override;
@@ -55,6 +56,8 @@ class Waveshare579BWR
   void write_window_(uint8_t command, const uint8_t *plane, int byte_start, int byte_end,
                      int y_start, int y_end);
   void prepare_partial_basemap_();
+  void update_partial_basemap_(int first_byte, int last_byte, int y_start, int y_end);
+  void perform_update_();
   void refresh_automatically_();
   uint32_t red_plane_hash_() const;
 
@@ -66,6 +69,7 @@ class Waveshare579BWR
   bool fast_refresh_{false};
   uint32_t partial_refresh_count_{0};
   uint32_t full_update_every_{5};
+  uint32_t update_debounce_ms_{500};
   uint32_t last_red_hash_{0};
 };
 

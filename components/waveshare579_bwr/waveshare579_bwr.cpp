@@ -42,10 +42,17 @@ void Waveshare579BWR::dump_config() {
   LOG_PIN("  Busy Pin: ", this->busy_pin_);
   ESP_LOGCONFIG(TAG, "  Full refresh after %" PRIu32 " partial refreshes", this->full_update_every_);
   ESP_LOGCONFIG(TAG, "  Full refresh mode: %s", this->fast_refresh_ ? "fast" : "normal");
+  ESP_LOGCONFIG(TAG, "  Update debounce: %" PRIu32 " ms", this->update_debounce_ms_);
   LOG_UPDATE_INTERVAL(this);
 }
 
 void Waveshare579BWR::update() {
+  // State changes often arrive in a short burst. Replacing this named timeout
+  // coalesces them into one render and one physical panel refresh.
+  this->set_timeout("update_debounce", this->update_debounce_ms_, [this]() { this->perform_update_(); });
+}
+
+void Waveshare579BWR::perform_update_() {
   ESP_LOGD(TAG, "Rendering framebuffer");
   this->refresh_handled_ = false;
   this->do_update_();
@@ -228,6 +235,9 @@ void Waveshare579BWR::partial_refresh(int x, int y, int width, int height) {
   this->send_data_(0x1C);
   this->send_command_(0x20);
   if (this->wait_busy_()) {
+    // RAM 2 is the controller's previous-image reference in B/W partial mode.
+    // Keep it synchronized before accepting another update.
+    this->update_partial_basemap_(first_byte, last_byte, y, y_end);
     this->partial_refresh_count_++;
     uint8_t *previous_black = this->buffer_ + 2 * PLANE_SIZE;
     for (int row = y; row <= y_end; row++) {
@@ -246,6 +256,25 @@ void Waveshare579BWR::prepare_partial_basemap_() {
   this->write_half_(0xA6, black_plane, false);
   this->set_ram_master_();
   this->write_half_(0x26, black_plane, true);
+}
+
+void Waveshare579BWR::update_partial_basemap_(int first_byte, int last_byte, int y_start,
+                                              int y_end) {
+  const uint8_t *black_plane = this->buffer_;
+
+  if (first_byte <= 49) {
+    const int slave_start = first_byte;
+    const int slave_end = std::min(49, last_byte);
+    this->set_window_slave_(slave_start, slave_end, y_start, y_end);
+    this->write_window_(0xA6, black_plane, slave_start, slave_end, y_start, y_end);
+  }
+
+  if (last_byte >= 49) {
+    const int master_start = std::max(49, first_byte);
+    const int master_end = last_byte;
+    this->set_window_master_(master_start, master_end, y_start, y_end);
+    this->write_window_(0x26, black_plane, master_start, master_end, y_start, y_end);
+  }
 }
 
 void Waveshare579BWR::write_half_(uint8_t command, const uint8_t *plane, bool master) {
